@@ -1,8 +1,9 @@
+import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from main import BaseTransformer
+from app.transformer.base import BaseTransformer
 
 
 @dataclass

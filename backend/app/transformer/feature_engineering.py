@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn import preprocessing
 from sklearn.cluster import KMeans
 
-from backend.app.transformer.base import BaseTransformer
+from app.transformer.base import BaseTransformer
 from typing import Any
 
 

@@ -9,7 +9,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.exceptions import NotFittedError
 from sklearn.pipeline import Pipeline
 
-from backend.app.transformer.base import BaseTransformer
+from app.transformer.base import BaseTransformer
 
 
 log = logging.getLogger(__name__)
