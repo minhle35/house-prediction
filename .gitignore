@@ -1,3 +1,12 @@
+# Python
 .venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Outputs
+*.csv
+regression.csv
+classification.csv
 
 main.py
