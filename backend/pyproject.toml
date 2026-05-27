@@ -15,3 +15,21 @@ dependencies = [
     "uvicorn[standard]>=0.34",
     "xgboost>=3.2.0",
 ]
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[project.scripts]
+serve = "app.serve:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "python-dotenv>=1.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

@@ -10,3 +10,5 @@ regression.csv
 classification.csv
 
 main.py
+
+.env
