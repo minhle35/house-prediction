@@ -1,0 +1,280 @@
+# Bug Report: Stateful Transformers Implemented as Stateless in sklearn Pipelines
+
+---
+
+## Context
+
+The project uses sklearn `Pipeline` to chain data preprocessing and model training steps. The sklearn `Pipeline` documentation defines a strict contract for intermediate steps:
+
+> *"Intermediate steps of the pipeline must be transformers, that is, they must implement `fit` and `transform` methods."*
+
+The implied semantic contract is:
+
+- `fit(X_train)` — **learns** data-dependent parameters from training data and stores them on `self`
+- `transform(X_any)` — **applies** those stored parameters to any data (training or unseen)
+- `fit_transform(X_train)` — convenience shorthand for `fit(X_train)` followed by `transform(X_train)`, used only at training time
+- `fit_predict(X_train)` — same pattern for clustering/estimator steps, used only at training time
+- `predict(X_any)` — applies the fitted model to any data, used at inference
+
+The key rule: **any method prefixed with `fit_` must never be called on inference data**, because it re-learns parameters from whatever data is passed.
+
+When `pipeline.fit(X_train, y_train)` is called, sklearn internally calls `fit_transform()` on each intermediate step — which sklearn's `TransformerMixin` resolves as `fit(X).transform(X)`. When `pipeline.predict(X_new)` is called, sklearn calls only `transform(X_new)` on each step — no fitting.
+
+---
+
+## Impacted Pipelines
+
+Both pipelines share `SCHEMA_SPECIFIC_BASE_STEPS` (defined in `backend/app/pipelines/base.py`), so bugs in shared steps affect both:
+
+```
+SCHEMA_SPECIFIC_BASE_STEPS  ← shared
+  └── TransformDate          ← BUG 2 (affects both pipelines)
+
+PIPELINE_REGRESSION          ← backend/app/pipelines/regression.py
+  └── CustomRegressionFeatures  ← BUG 1 (regression only)
+
+PIPELINE_CLASSIFICATION      ← backend/app/pipelines/classification.py
+  └── PropertyTypeFeatures   ← OK (stateless, deterministic)
+```
+
+---
+
+## Bug 1 — `CustomRegressionFeatures`: KMeans and StandardScaler fit inside `transform()`
+
+**File:** `backend/app/transformer/feature_engineering.py`
+**Pipeline:** `PIPELINE_REGRESSION` only
+
+### Erroneous code (original `main.py`)
+
+```python
+@dataclass
+class CustomRegressionFeatures(BaseTransformer):
+    sell_month_col: str | None = None
+
+    # No fit() override — inherits BaseTransformer.fit() which is a no-op
+
+    def transform(self, X: pd.DataFrame) -> Any:
+        # ... other feature engineering ...
+
+        clustering_features = [
+            "suburb_lat",
+            "suburb_lng",
+            "log_suburb_median_house_price",
+            "log_km_from_cbd",
+        ]
+        clustering_df = X[clustering_features].dropna()
+        scaler = preprocessing.StandardScaler()
+        scaled = scaler.fit_transform(clustering_df)   # ← fits on whatever data is passed
+        kmeans = KMeans(n_clusters=20, random_state=42)
+        clusters = kmeans.fit_predict(scaled)          # ← centroids learned from same data
+        X.loc[clustering_df.index, "postcode_cluster"] = clusters
+        X["postcode_cluster"] = X["postcode_cluster"].fillna(-1).astype(int).astype(str)
+        X["region_postcode_cluster"] = (
+            X["region"].astype(str) + "_" + X["postcode_cluster"]
+        )
+        return X
+```
+
+### Why this is wrong
+
+`scaler` and `kmeans` are local variables — created, used, and discarded on every call. There is no shared state between the training call and the inference call.
+
+```
+pipeline.fit(X_train):
+    CustomRegressionFeatures.fit(X_train)       ← no-op (inherited)
+    CustomRegressionFeatures.transform(X_train) ← fits scaler+KMeans on train data,
+                                                   discards them immediately
+
+pipeline.predict(X_new):
+    CustomRegressionFeatures.transform(X_new)   ← fits NEW scaler+KMeans on test data,
+                                                   discards them immediately
+```
+
+The cluster label `postcode_cluster=3` at training time and `postcode_cluster=3` at inference time refer to different geographic groups — LightGBM's learned association between cluster IDs and prices is completely invalidated at inference.
+
+### Classification
+
+| Label | Accurate? | Reason |
+| --- | --- | --- |
+| Data leakage | No | Test data does not flow back into LightGBM's weights |
+| Train-test inconsistency | Yes | Clustering uses different centroids at train vs. inference time |
+| Stateful transformer misuse | Yes | A stateful operation was incorrectly implemented as stateless |
+
+### Fix applied in `backend/app/transformer/feature_engineering.py`
+
+**Step 1** — clustering config promoted to module-level constants (shared between `fit()` and `transform()`):
+
+```python
+_CLUSTERING_FEATURES = [
+    "suburb_lat",
+    "suburb_lng",
+    "log_suburb_median_house_price",
+    "log_km_from_cbd",
+]
+
+N_CLUSTER = 20
+RANDOM_STATE = 42
+```
+
+**Step 2** — `_scaler` and `_kmeans` become instance state via `field(default=None, init=False)`, making them dataclass fields that are not constructor arguments:
+
+```python
+@dataclass
+class CustomRegressionFeatures(BaseTransformer):
+    sell_month_col: str | None = None
+
+    _scaler: preprocessing.StandardScaler | None = field(default=None, init=False)
+    _kmeans: KMeans | None = field(default=None, init=False)
+```
+
+**Step 3** — `fit()` learns from training data once and stores on `self`:
+
+```python
+def fit(self, X: pd.DataFrame, y: Any = None) -> Any:
+    clustering_df = X[_CLUSTERING_FEATURES].dropna()
+    self._scaler = preprocessing.StandardScaler()
+    scaled = self._scaler.fit_transform(clustering_df)
+    self._kmeans = KMeans(n_clusters=N_CLUSTER, random_state=RANDOM_STATE)
+    self._kmeans.fit(scaled)
+    return self
+```
+
+**Step 4** — `transform()` reuses stored state, raises `NotFittedError` if called before `fit()`:
+
+```python
+def transform(self, X: pd.DataFrame) -> Any:
+    if self._scaler is None or self._kmeans is None:
+        raise NotFittedError("CustomRegressionFeatures is not fitted yet.")
+
+    # ... other feature engineering ...
+
+    clustering_df = X[_CLUSTERING_FEATURES].dropna()
+    scaled = self._scaler.transform(clustering_df)   # reuse training-derived scale params
+    clusters = self._kmeans.predict(scaled)          # reuse training-derived centroids
+    X.loc[clustering_df.index, "postcode_cluster"] = clusters
+    X["postcode_cluster"] = X["postcode_cluster"].fillna(-1).astype(int).astype(str)
+    X["region_postcode_cluster"] = (
+        X["region"].astype(str) + "_" + X["postcode_cluster"]
+    )
+    return X
+```
+
+---
+
+## Bug 2 — `TransformDate`: `days_since_relative_to_min` computed from current data
+
+**File:** `backend/app/transformer/preprocessing.py`
+**Pipeline:** Both `PIPELINE_REGRESSION` and `PIPELINE_CLASSIFICATION` via `SCHEMA_SPECIFIC_BASE_STEPS`
+
+### Erroneous code
+
+```python
+@dataclass
+class TransformDate(BaseTransformer):
+    # ...
+    days_since_relative_to_min: str | None = None
+
+    # No fit() override — inherits BaseTransformer.fit() which is a no-op
+
+    def transform(self, X: pd.DataFrame) -> Any:
+        X[self.target] = pd.to_datetime(X[self.target], format=self.target_datefmt)
+
+        if self.days_since_relative_to_min:
+            X[self.days_since_relative_to_min] = (
+                X[self.target] - X[self.target].min()   # ← min() computed from current X
+            ).dt.days
+```
+
+### Why this is wrong
+
+`X[self.target].min()` is a data-dependent parameter — it is the earliest sale date in whatever batch is currently being transformed. This is a learned statistic that must come from training data only.
+
+```
+pipeline.fit(X_train):
+    TransformDate.transform(X_train)
+        → min_date = X_train["date_sold"].min()   ← e.g. 2020-01-05
+        → sell_days_since_min = days since 2020-01-05
+
+pipeline.predict(X_new):
+    TransformDate.transform(X_new)
+        → min_date = X_new["date_sold"].min()     ← e.g. 2022-06-12 (different!)
+        → sell_days_since_min = days since 2022-06-12
+```
+
+A property sold on 2021-03-01 would produce `sell_days_since_min=420` during training but `sell_days_since_min=-468` (or `0` for the single-row inference case) at inference. The feature is semantically broken at inference time.
+
+The worst case is a FastAPI server receiving one property at a time: `X_new` has a single row, so `X_new.min()` equals that row's own sale date, making `sell_days_since_min=0` for every single prediction.
+
+This affects `sell_days_since_min` in both `PIPELINE_REGRESSION` and `PIPELINE_CLASSIFICATION`, as the step is defined in the shared `SCHEMA_SPECIFIC_BASE_STEPS` in `backend/app/pipelines/base.py`:
+
+```python
+TransformDate(
+    target="date_sold",
+    days_since="sell_days_since",
+    days_since_relative_to_min="sell_days_since_min",   # ← uses the broken path
+    year="sell_year",
+    month="sell_month",
+    season="sell_season",
+)
+```
+
+### Classification
+
+| Label | Accurate? | Reason |
+| --- | --- | --- |
+| Data leakage | No | Test min date does not flow into model weights |
+| Train-test inconsistency | Yes | Temporal anchor differs between training and inference |
+| Stateful transformer misuse | Yes | A data-dependent statistic was computed in `transform()` instead of stored in `fit()` |
+| Silent failure at inference | Yes | No error is raised — the feature silently produces wrong values |
+
+### Fix applied in `backend/app/transformer/preprocessing.py`
+
+**Step 1** — `_min_date` becomes instance state:
+
+```python
+from dataclasses import dataclass, field
+from sklearn.exceptions import NotFittedError
+
+@dataclass
+class TransformDate(BaseTransformer):
+    # ... existing fields ...
+    _min_date: pd.Timestamp | None = field(default=None, init=False)
+```
+
+**Step 2** — `fit()` learns the minimum date from training data and stores it on `self`:
+
+```python
+def fit(self, X: pd.DataFrame, y: Any = None) -> Any:
+    if self.days_since_relative_to_min:
+        dates = pd.to_datetime(X[self.target], format=self.target_datefmt)
+        self._min_date = dates.min()
+    return self
+```
+
+**Step 3** — `transform()` reuses `self._min_date`, raises `NotFittedError` if called before `fit()`:
+
+```python
+def transform(self, X: pd.DataFrame) -> Any:
+    X[self.target] = pd.to_datetime(X[self.target], format=self.target_datefmt)
+
+    if self.days_since:
+        X[self.days_since] = (datum - X[self.target]).dt.days
+    if self.days_since_relative_to_min:
+        if self._min_date is None:
+            raise NotFittedError("TransformDate is not fitted yet.")
+        X[self.days_since_relative_to_min] = (
+            X[self.target] - self._min_date    # reuse training-derived anchor
+        ).dt.days
+    # ...
+```
+
+---
+
+## Summary
+
+| Bug | Class | Statistic incorrectly in `transform()` | Pipelines affected |
+| --- | --- | --- | --- |
+| 1 | `CustomRegressionFeatures` | `StandardScaler` params, KMeans centroids | `PIPELINE_REGRESSION` |
+| 2 | `TransformDate` | Minimum sale date (`X[target].min()`) | Both pipelines |
+
+Both bugs share the same root cause: the class inherited the no-op `fit()` from `BaseTransformer` without overriding it, so data-dependent computation that belongs in `fit()` was placed inside `transform()` instead. sklearn calls `transform()` at both training and inference time — without a proper `fit()`, there is no way for the step to distinguish between the two.
