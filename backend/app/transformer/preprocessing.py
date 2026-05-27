@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from sklearn.exceptions import NotFittedError
 
 from app.transformer.base import BaseTransformer
 
@@ -48,6 +50,14 @@ class TransformDate(BaseTransformer):
     month: str | None = None
     season: str | None = None
 
+    _min_date: pd.Timestamp | None = field(default=None, init=False)
+
+    def fit(self, X: pd.DataFrame, y: Any = None) -> Any:  # noqa: ARG002
+        if self.days_since_relative_to_min:
+            dates = pd.to_datetime(X[self.target], format=self.target_datefmt)
+            self._min_date = dates.min()
+        return self
+
     def transform(self, X: pd.DataFrame) -> Any:
         datum = pd.Timestamp(self.datum)
         X[self.target] = pd.to_datetime(X[self.target], format=self.target_datefmt)
@@ -55,8 +65,10 @@ class TransformDate(BaseTransformer):
         if self.days_since:
             X[self.days_since] = (datum - X[self.target]).dt.days  # pyright: ignore[reportOperatorIssue]
         if self.days_since_relative_to_min:
+            if self._min_date is None:
+                raise NotFittedError("TransformDate is not fitted yet.")
             X[self.days_since_relative_to_min] = (
-                X[self.target] - X[self.target].min()
+                X[self.target] - self._min_date
             ).dt.days
         if self.year:
             X[self.year] = X[self.target].dt.year

@@ -1,13 +1,24 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 from sklearn.cluster import KMeans
+from sklearn.exceptions import NotFittedError
 
 from app.transformer.base import BaseTransformer
 from typing import Any
+
+_CLUSTERING_FEATURES = [
+    "suburb_lat",
+    "suburb_lng",
+    "log_suburb_median_house_price",
+    "log_km_from_cbd",
+]
+
+N_CLUSTER = 20
+RANDOM_STATE = 42
 
 
 @dataclass
@@ -23,7 +34,21 @@ class CustomRegressionFeatures(BaseTransformer):
 
     sell_month_col: str | None = None
 
+    _scaler: preprocessing.StandardScaler | None = field(default=None, init=False)
+    _kmeans: KMeans | None = field(default=None, init=False)
+
+    def fit(self, X: pd.DataFrame, y: Any = None) -> Any:
+        clustering_df = X[_CLUSTERING_FEATURES].dropna()
+        self._scaler = preprocessing.StandardScaler()
+        scaled = self._scaler.fit_transform(clustering_df)
+        self._kmeans = KMeans(n_clusters=N_CLUSTER, random_state=RANDOM_STATE)
+        self._kmeans.fit(scaled)
+        return self
+
     def transform(self, X: pd.DataFrame) -> Any:
+        if self._scaler is None or self._kmeans is None:
+            raise NotFittedError("CustomRegressionFeatures is not fitted yet.")
+
         if self.sell_month_col:
             X["month_sin"] = np.sin(2 * np.pi * X[self.sell_month_col] / 12)
             X["month_cos"] = np.cos(2 * np.pi * X[self.sell_month_col] / 12)
@@ -50,17 +75,9 @@ class CustomRegressionFeatures(BaseTransformer):
         X["total_rooms"] = X["num_bed"] + X["num_bath"]
         X["total_spaces"] = X["total_rooms"] + X["num_parking"]
 
-        clustering_features = [
-            "suburb_lat",
-            "suburb_lng",
-            "log_suburb_median_house_price",
-            "log_km_from_cbd",
-        ]
-        clustering_df = X[clustering_features].dropna()
-        scaler = preprocessing.StandardScaler()
-        scaled = scaler.fit_transform(clustering_df)
-        kmeans = KMeans(n_clusters=20, random_state=42)
-        clusters = kmeans.fit_predict(scaled)
+        clustering_df = X[_CLUSTERING_FEATURES].dropna()
+        scaled = self._scaler.transform(clustering_df)
+        clusters = self._kmeans.predict(scaled)
         X.loc[clustering_df.index, "postcode_cluster"] = clusters
         X["postcode_cluster"] = X["postcode_cluster"].fillna(-1).astype(int).astype(str)
         X["region_postcode_cluster"] = (
