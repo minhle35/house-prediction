@@ -4,6 +4,12 @@ import numpy as np
 import pandas as pd
 
 
+def _bin_transport_time(x: pd.Series) -> list:
+    return pd.cut(
+        x, bins=[-1, 30, 60, float("inf")], labels=["short", "medium", "long"]
+    ).to_list()
+
+
 SCHEMA_SPECIFIC_BASE_STEPS = [
     # ===== Pre-processing: clean up data =====
     (
@@ -77,9 +83,7 @@ SCHEMA_SPECIFIC_BASE_STEPS = [
     (
         "bin_transport_time_to",
         PandasColumnTransform(
-            func=lambda x: pd.cut(
-                x, bins=[-1, 30, 60, float("inf")], labels=["short", "medium", "long"]
-            ).to_list(),
+            func=_bin_transport_time,
             columns=[
                 "time_to_cbd_public_transport_town_hall_st",
                 "time_to_cbd_driving_town_hall_st",
