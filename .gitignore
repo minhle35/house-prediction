@@ -12,3 +12,15 @@ classification.csv
 main.py
 
 .env
+
+# Build Artifacts
+backend/backend.egg-info/*
+
+# Trained models
+backend/models/*
+
+# Training input
+backend/data/*
+
+# Notebooks
+*.ipynb
