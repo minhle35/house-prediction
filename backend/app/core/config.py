@@ -21,5 +21,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
 
+    # Local model cache / training fallback
+    model_dir: str = "models"
+    train_data_path: str = ""
+    test_data_path: str = ""
+
 
 settings = Settings()
