@@ -24,3 +24,6 @@ backend/data/*
 
 # Notebooks
 *.ipynb
+
+# MLFlow artifacts
+mlruns/
