@@ -1,0 +1,24 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# libgomp is required by LightGBM
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency files first for layer caching
+COPY pyproject.toml uv.lock ./
+
+# Re-lock inside the container to pick up the correct mlflow version,
+# then install all deps including dev group.
+RUN uv lock && uv sync --no-install-project
+
+# Copy source
+COPY . .
+
+# Install the project itself
+RUN uv sync
+
+CMD ["uv", "run", "pytest", "tests/unit/", "-v", "-m", "unit", "--tb=short"]
