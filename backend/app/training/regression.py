@@ -22,7 +22,7 @@ def regression_main(
     test_df: pd.DataFrame,
     output: Path,
     tracker: "MLflowTracker | None" = None,
-) -> None:
+) -> Pipeline:
     """Fit a regression model over training data and predict for test data.
 
     Parameters
@@ -95,3 +95,4 @@ def regression_main(
         median_absolute_error=float(med_err),
     )
     tracker.log_regression(params, result, pipeline)
+    return pipeline

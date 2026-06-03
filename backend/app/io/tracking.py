@@ -2,11 +2,17 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder
 
 from app.core.config import Settings
+
+# Absolute path to backend/ so DB and mlruns/ are always in the same place
+# regardless of the working directory when training is invoked.
+_BACKEND_DIR = Path(__file__).parents[2]
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +64,7 @@ class MLflowTracker:
 
         import mlflow
 
-        uri = settings.mlflow_tracking_uri or "sqlite:///mlflow.db"
+        uri = settings.mlflow_tracking_uri or f"sqlite:///{_BACKEND_DIR}/mlflow.db"
         mlflow.set_tracking_uri(uri)
 
         log.info("MLflow tracking enabled — URI: %s", uri)
@@ -82,7 +88,8 @@ class MLflowTracker:
 
         mlflow.set_experiment(self._settings.mlflow_experiment_regression)
 
-        with mlflow.start_run() as run:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with mlflow.start_run(run_name=f"regression_{ts}") as run:
             mlflow.log_params(params)
             mlflow.log_metrics(
                 {
@@ -95,14 +102,13 @@ class MLflowTracker:
                     "median_absolute_error": result.median_absolute_error,
                 }
             )
-            mlflow.sklearn.log_model(pipeline, name="model")
+            model_info = mlflow.sklearn.log_model(pipeline, name=f"regression_{ts}")
 
             if (
                 self._settings.mlflow_register_models
                 and result.r2 >= self._settings.mlflow_r2_threshold
             ):
-                model_uri = f"runs:/{run.info.run_id}/model"
-                mlflow.register_model(model_uri, "house-price-regression")
+                mlflow.register_model(model_info.model_uri, "house-price-regression")
                 log.info(
                     "Registered regression model (r2=%.4f >= threshold %.2f)",
                     result.r2,
@@ -115,7 +121,11 @@ class MLflowTracker:
                     self._settings.mlflow_r2_threshold,
                 )
 
-            log.info("MLflow regression run recorded: %s", run.info.run_id)
+            log.info(
+                "MLflow regression run recorded — %s\n  model: %s",
+                run.info.run_id,
+                model_info.model_uri,
+            )
             return run.info.run_id
 
     def log_classification(
@@ -134,7 +144,8 @@ class MLflowTracker:
 
         mlflow.set_experiment(self._settings.mlflow_experiment_classification)
 
-        with mlflow.start_run() as run:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with mlflow.start_run(run_name=f"classification_{ts}") as run:
             mlflow.log_params(params)
 
             scalar_metrics = {
@@ -152,7 +163,7 @@ class MLflowTracker:
             }
             mlflow.log_metrics({**scalar_metrics, **per_class})
 
-            mlflow.sklearn.log_model(pipeline, name="model")
+            model_info = mlflow.sklearn.log_model(pipeline, name=f"classification_{ts}")
 
             # Store label encoder classes as a tag for traceability
             mlflow.set_tag("label_classes", json.dumps(le.classes_.tolist()))
@@ -161,8 +172,7 @@ class MLflowTracker:
                 self._settings.mlflow_register_models
                 and result.weighted_f1 >= self._settings.mlflow_f1_threshold
             ):
-                model_uri = f"runs:/{run.info.run_id}/model"
-                mlflow.register_model(model_uri, "house-type-classification")
+                mlflow.register_model(model_info.model_uri, "house-type-classification")
                 log.info(
                     "Registered classification model (weighted_f1=%.4f >= threshold %.2f)",
                     result.weighted_f1,
@@ -175,7 +185,11 @@ class MLflowTracker:
                     self._settings.mlflow_f1_threshold,
                 )
 
-            log.info("MLflow classification run recorded: %s", run.info.run_id)
+            log.info(
+                "MLflow classification run recorded — %s\n  model: %s",
+                run.info.run_id,
+                model_info.model_uri,
+            )
             return run.info.run_id
 
 

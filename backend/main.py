@@ -6,9 +6,12 @@ import pandas as pd
 
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.io.artifacts import ModelArtifacts
 from app.io.tracking import make_tracker
 from app.pipelines import PIPELINE_CLASSIFICATION, PIPELINE_REGRESSION
 from app.training import classification_main, regression_main
+
+_artifacts = ModelArtifacts(settings)
 
 log = logging.getLogger(__name__)
 
@@ -17,23 +20,28 @@ def run_regression(train_df: pd.DataFrame, test_df: pd.DataFrame) -> None:
     hline = "-" * 80
     log.info("\n%s\nStarting Regression Pipeline\n%s", hline, hline)
     tracker = make_tracker(settings)
-    regression_main(
+    pipeline = regression_main(
         PIPELINE_REGRESSION, train_df.copy(), test_df.copy(), Path("regression.csv"),
         tracker=tracker,
     )
+    _artifacts.save(pipeline, settings.regression_model_name)
+    log.info("Regression model saved to %s", settings.regression_model_name)
 
 
 def run_classification(train_df: pd.DataFrame, test_df: pd.DataFrame) -> None:
     hline = "-" * 80
     log.info("\n%s\nStarting Classification Pipeline\n%s", hline, hline)
     tracker = make_tracker(settings)
-    classification_main(
+    pipeline, le = classification_main(
         PIPELINE_CLASSIFICATION,
         train_df.copy(),
         test_df.copy(),
         Path("classification.csv"),
         tracker=tracker,
     )
+    _artifacts.save(pipeline, settings.classification_model_name)
+    _artifacts.save(le, "label_encoder")
+    log.info("Classification model saved to %s", settings.classification_model_name)
 
 
 def main() -> None:

@@ -24,7 +24,7 @@ def classification_main(
     test_df: pd.DataFrame,
     output: Path,
     tracker: "MLflowTracker | None" = None,
-) -> None:
+) -> tuple[Pipeline, preprocessing.LabelEncoder]:
     """Fit a classification model over training data and predict for test data.
 
     Parameters
@@ -139,3 +139,4 @@ def classification_main(
         per_class_f1=per_class_f1,
     )
     tracker.log_classification(params, result, pipeline, le)
+    return pipeline, le

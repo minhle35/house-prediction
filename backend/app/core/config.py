@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # MLflow experiment tracking
     mlflow_enabled: bool = False
-    mlflow_tracking_uri: str = ""                                    # "" = local ./mlruns
+    mlflow_tracking_uri: str = ""                                    # "" = sqlite:///<backend_dir>/mlflow.db
     mlflow_experiment_regression: str = "house-price-regression"
     mlflow_experiment_classification: str = "house-type-classification"
     mlflow_register_models: bool = False                             # promote to Model Registry
