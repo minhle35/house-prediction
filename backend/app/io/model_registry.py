@@ -122,9 +122,13 @@ def _fit_regression(train_df: pd.DataFrame) -> None:
         mae=float(sk_metrics.mean_absolute_error(train_y, predicted)),
         mse=mse,
         rmse=math.sqrt(mse),
-        explained_variance=float(sk_metrics.explained_variance_score(train_y, predicted)),
+        explained_variance=float(
+            sk_metrics.explained_variance_score(train_y, predicted)
+        ),
         max_error=float(sk_metrics.max_error(train_y, predicted)),
-        median_absolute_error=float(sk_metrics.median_absolute_error(train_y, predicted)),
+        median_absolute_error=float(
+            sk_metrics.median_absolute_error(train_y, predicted)
+        ),
     )
     _tracker.log_regression(params, result, pipeline)
 
@@ -133,15 +137,18 @@ def _fit_classification(train_df: pd.DataFrame) -> None:
     train_x, train_y_raw = split_x_y(train_df, "type", also_pop=["id"])
 
     le = LabelEncoder()
-    train_y: np.ndarray = le.fit_transform(train_y_raw)
+    train_y: np.ndarray = np.asarray(le.fit_transform(train_y_raw))
 
     class_counts = pd.Series(train_y_raw).value_counts()
     majority = class_counts.max()
     class_weights: dict[int, float] = {
         int(le.transform([cls])[0]): (
-            10.0 if (ratio := count / majority) < 0.01
-            else 5.0 if ratio < 0.05
-            else 3.0 if ratio < 0.1
+            10.0
+            if (ratio := count / majority) < 0.01
+            else 5.0
+            if ratio < 0.05
+            else 3.0
+            if ratio < 0.1
             else 1.0
         )
         for cls, count in class_counts.items()
@@ -160,7 +167,9 @@ def _fit_classification(train_df: pd.DataFrame) -> None:
     # In-sample metrics
     predicted = pipeline.predict(train_x)
     f1_per_arr = sk_metrics.f1_score(train_y, predicted, average=None, zero_division=1)
-    per_class_f1 = {str(cls): float(s) for cls, s in zip(le.classes_, f1_per_arr, strict=False)}
+    per_class_f1 = {
+        str(cls): float(s) for cls, s in zip(le.classes_, f1_per_arr, strict=False)
+    }
     fp = pipeline.named_steps["feature_processing"].get_params()
     params = {
         "correlation_threshold": fp["numerical"]["feature_correlation"]["threshold"],
@@ -172,10 +181,22 @@ def _fit_classification(train_df: pd.DataFrame) -> None:
     }
     result = ClassificationResult(
         accuracy=float(sk_metrics.accuracy_score(train_y, predicted)),
-        weighted_f1=float(sk_metrics.f1_score(train_y, predicted, average="weighted", zero_division=1)),
-        macro_f1=float(sk_metrics.f1_score(train_y, predicted, average="macro", zero_division=1)),
-        precision=float(sk_metrics.precision_score(train_y, predicted, average="weighted", zero_division=1)),
-        recall=float(sk_metrics.recall_score(train_y, predicted, average="weighted", zero_division=1)),
+        weighted_f1=float(
+            sk_metrics.f1_score(train_y, predicted, average="weighted", zero_division=1)
+        ),
+        macro_f1=float(
+            sk_metrics.f1_score(train_y, predicted, average="macro", zero_division=1)
+        ),
+        precision=float(
+            sk_metrics.precision_score(
+                train_y, predicted, average="weighted", zero_division=1
+            )
+        ),
+        recall=float(
+            sk_metrics.recall_score(
+                train_y, predicted, average="weighted", zero_division=1
+            )
+        ),
         cohen_kappa=float(sk_metrics.cohen_kappa_score(train_y, predicted)),
         matthews_corrcoef=float(sk_metrics.matthews_corrcoef(train_y, predicted)),
         per_class_f1=per_class_f1,
