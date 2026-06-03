@@ -25,5 +25,10 @@ backend/data/*
 # Notebooks
 *.ipynb
 
-# MLFlow artifacts
+# MLflow runtime artifacts
 mlruns/
+backend/mlruns/
+backend/*.db
+
+# .DS_Store
+.DS_Store
