@@ -26,5 +26,14 @@ class Settings(BaseSettings):
     train_data_path: str = ""
     test_data_path: str = ""
 
+    # MLflow experiment tracking
+    mlflow_enabled: bool = False
+    mlflow_tracking_uri: str = ""                                    # "" = sqlite:///<backend_dir>/mlflow.db
+    mlflow_experiment_regression: str = "house-price-regression"
+    mlflow_experiment_classification: str = "house-type-classification"
+    mlflow_register_models: bool = False                             # promote to Model Registry
+    mlflow_r2_threshold: float = 0.70                                # min r2 to register regression
+    mlflow_f1_threshold: float = 0.80                                # min weighted_f1 to register classification
+
 
 settings = Settings()

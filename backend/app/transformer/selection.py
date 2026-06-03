@@ -48,13 +48,13 @@ class CorrelationFeatureSelector(BaseEstimator):
             for column in upper_tri.columns
             if any(upper_tri[column] > self.threshold)
         ]
+        log.info("CorrelationFeatureSelector dropping %s", self._to_drop)
         return self
 
     def transform(self, X: pd.DataFrame) -> Any:
         if self._to_drop is None:
             raise NotFittedError("CorrelationFeatureSelector is not fitted yet.")
 
-        log.info("CorrelationFeatureSelector dropping %s", self._to_drop)
         return X.drop(columns=self._to_drop)
 
 
@@ -85,6 +85,14 @@ class VarianceFeatureSelector(BaseTransformer):
 
         self._selector = feature_selection.VarianceThreshold(self.threshold)
         self._selector.fit(X[self.cols_choose_from])
+
+        mask = self._selector.get_support()
+        drop = [
+            col
+            for idx, col in enumerate(self._selector.feature_names_in_)
+            if not mask[idx]
+        ]
+        log.info("VarianceFeatureSelector dropping %s", drop)
         return self
 
     def transform(self, X: pd.DataFrame) -> Any:
@@ -110,7 +118,6 @@ class VarianceFeatureSelector(BaseTransformer):
             for idx, col in enumerate(self._selector.feature_names_in_)
             if not mask[idx]
         ]
-        log.info("VarianceFeatureSelector dropping %s", drop)
         return X.drop(columns=drop)
 
 

@@ -9,8 +9,20 @@ Usage:
 
 import argparse
 import os
+import socket
 import sys
 from pathlib import Path
+
+
+def _find_free_port(host: str, start: int, max_attempts: int = 10) -> int:
+    for port in range(start, start + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found between {start} and {start + max_attempts - 1}")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,7 +57,9 @@ modes:
         default=None,
         help="Directory for cached joblib files (default: models/)",
     )
-    cli.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    cli.add_argument(
+        "--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)"
+    )
     cli.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     cli.add_argument(
         "--reload",
@@ -53,7 +67,8 @@ modes:
         help="Enable auto-reload on code changes (dev only)",
     )
     cli.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="count",
         default=0,
         help="Increase log verbosity (-v INFO, -vv DEBUG)",
@@ -80,7 +95,10 @@ def _configure_local(args: argparse.Namespace) -> None:
     elif args.train_data:
         train_path = Path(args.train_data)
         if not train_path.exists():
-            print(f"[serve] error: --train-data file not found: {train_path}", file=sys.stderr)
+            print(
+                f"[serve] error: --train-data file not found: {train_path}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         os.environ["TRAIN_DATA_PATH"] = str(train_path.resolve())
         print(f"[serve] local mode — no cache found, will train from {train_path}")
@@ -120,13 +138,16 @@ def main() -> None:
         _configure_azure(args)
 
     log_level = ["warning", "info", "debug"][min(args.verbose, 2)]
+    port = _find_free_port(args.host, args.port)
+    if port != args.port:
+        print(f"[serve] port {args.port} in use, using {port} instead")
 
     import uvicorn
 
     uvicorn.run(
-        "app.api.main:app",
+        "app.main:app",
         host=args.host,
-        port=args.port,
+        port=port,
         reload=args.reload,
         log_level=log_level,
     )

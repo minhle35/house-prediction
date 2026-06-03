@@ -1,6 +1,9 @@
 import functools
+import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 from sklearn import metrics, preprocessing
 from sklearn.pipeline import Pipeline
 import pandas as pd
@@ -8,6 +11,9 @@ import numpy as np
 import numpy.typing as npt
 
 from app.training.utils import split_x_y, pipeline_timed_context
+
+if TYPE_CHECKING:
+    from app.io.tracking import MLflowTracker
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +23,8 @@ def classification_main(
     train_df: pd.DataFrame,
     test_df: pd.DataFrame,
     output: Path,
-) -> None:
+    tracker: "MLflowTracker | None" = None,
+) -> tuple[Pipeline, preprocessing.LabelEncoder]:
     """Fit a classification model over training data and predict for test data.
 
     Parameters
@@ -29,7 +36,13 @@ def classification_main(
         output.
     output: Path
         The output file to save the predictions over `test_df` to
+    tracker: MLflowTracker | None
+        Optional tracker for experiment logging. Defaults to NullTracker (no-op).
     """
+    from app.io.tracking import ClassificationResult, NullTracker
+
+    if tracker is None:
+        tracker = NullTracker()
 
     train_x, train_y = split_x_y(train_df, "type", also_pop=["id"])
     test_x, test_y = split_x_y(test_df, "type")
@@ -38,53 +51,36 @@ def classification_main(
     train_y_encoded: npt.NDArray[int] = le.fit_transform(train_y)  # type:ignore[return]
     test_y_encoded: npt.NDArray[int] = le.transform(test_y)  # type:ignore[return]
 
-    # Get class counts to determine weights
     class_counts = pd.Series(train_y).value_counts()
     log.info("Original class distribution:\n%s", class_counts)
 
-    # Calculate custom weights inversely proportional to class frequency
-    # with extra boost for very rare classes
     majority_class_count = class_counts.max()
-    class_weights = {}
+    class_weights: dict[int, float] = {}
 
     for class_name, count in class_counts.items():
-        class_idx = le.transform([class_name])[0]
+        class_idx = int(le.transform([class_name])[0])
         class_ratio = count / majority_class_count
         log.info("Class '%s' count, ratio: %d - %d", class_name, count, class_ratio)
 
-        # Apply stronger weights for rarer classes
-        if class_ratio < 0.01:  # Very rare classes (<1% of majority)
-            weight = 10.0  # Very high weight
-            log.info(
-                "Class ratio '%s' < 0.01 is very rare, applying high weight: %d",
-                class_name,
-                weight,
-            )
-        elif class_ratio < 0.05:  # Rare classes (<5% of majority)
-            weight = 5.0  # High weight
-            log.info(
-                "Class ratio '%s' < 0.05 is rare, applying high weight: %d",
-                class_name,
-                weight,
-            )
-        elif class_ratio < 0.1:  # Uncommon classes (<10% of majority)
-            weight = 3.0  # Moderate weight
-            log.info(
-                "Class ratio '%s' < 0.1 is uncommon, applying moderate weight: %d",
-                class_name,
-                weight,
-            )
-        else:  # Common classes
-            weight = 1.0  # Regular weight
+        if class_ratio < 0.01:
+            weight = 10.0
+            log.info("Class ratio '%s' < 0.01 is very rare, applying high weight: %d", class_name, weight)
+        elif class_ratio < 0.05:
+            weight = 5.0
+            log.info("Class ratio '%s' < 0.05 is rare, applying high weight: %d", class_name, weight)
+        elif class_ratio < 0.1:
+            weight = 3.0
+            log.info("Class ratio '%s' < 0.1 is uncommon, applying moderate weight: %d", class_name, weight)
+        else:
+            weight = 1.0
 
         class_weights[class_idx] = weight
 
     log.info("Class weights: %s", class_weights)
 
-    # Generate sample weights for XGBoost to use during training
     sample_weights = np.array([class_weights.get(cls, 1.0) for cls in train_y_encoded])
 
-    with pipeline_timed_context(pipeline) as pl:  # For debugging; use `-v`...
+    with pipeline_timed_context(pipeline) as pl:
         pl.fit(train_x, y=train_y_encoded, classify__sample_weight=sample_weights)
 
     log.info("Classification predicting...")
@@ -93,54 +89,54 @@ def classification_main(
     final_df = test_x.assign(type=le.inverse_transform(predicted_y.tolist()))
     final_df[["id", "type"]].to_csv(output, index=False)
 
-    if log.isEnabledFor(logging.INFO):  # For debugging; use `-v`...
-        mm = {
-            "Accuracy": metrics.accuracy_score,
-            "Weighted F1": functools.partial(
-                metrics.f1_score, average="weighted", zero_division=1
-            ),
-            "Macro F1": functools.partial(
-                metrics.f1_score, average="macro", zero_division=1
-            ),
-            "Precision": functools.partial(
-                metrics.precision_score, average="weighted", zero_division=1
-            ),
-            "Recall": functools.partial(
-                metrics.recall_score, average="weighted", zero_division=1
-            ),
-            "Cohen Kappa": metrics.cohen_kappa_score,
-            "Matthews Corr. Coef.": metrics.matthews_corrcoef,
-        }
-        for key, fn in mm.items():
-            val = f"{fn(test_y_encoded, predicted_y):,.4f}"
-            log.info("Classification %-20s: %s", key, val)
+    accuracy = float(metrics.accuracy_score(test_y_encoded, predicted_y))
+    weighted_f1 = float(metrics.f1_score(test_y_encoded, predicted_y, average="weighted", zero_division=1))
+    macro_f1 = float(metrics.f1_score(test_y_encoded, predicted_y, average="macro", zero_division=1))
+    precision = float(metrics.precision_score(test_y_encoded, predicted_y, average="weighted", zero_division=1))
+    recall = float(metrics.recall_score(test_y_encoded, predicted_y, average="weighted", zero_division=1))
+    cohen_kappa = float(metrics.cohen_kappa_score(test_y_encoded, predicted_y))
+    mcc = float(metrics.matthews_corrcoef(test_y_encoded, predicted_y))
 
-        # Create confusion matrix with original class names
+    f1_per_class_arr = metrics.f1_score(test_y_encoded, predicted_y, average=None, zero_division=1)
+    per_class_f1 = {str(cls): float(score) for cls, score in zip(le.classes_, f1_per_class_arr, strict=False)}
+
+    if log.isEnabledFor(logging.INFO):
+        for key, val in [
+            ("Accuracy", accuracy), ("Weighted F1", weighted_f1), ("Macro F1", macro_f1),
+            ("Precision", precision), ("Recall", recall),
+            ("Cohen Kappa", cohen_kappa), ("Matthews Corr. Coef.", mcc),
+        ]:
+            log.info("Classification %-20s: %.4f", key, val)
+
         cm = metrics.confusion_matrix(test_y_encoded, predicted_y)
-        class_names = le.classes_
-        log.info("Classification Confusion Matrix (original class names):")
-        log.info("Classes: %s", class_names)
-        log.info("\n%s", cm)
+        log.info("Classification Confusion Matrix:\nClasses: %s\n%s", le.classes_, cm)
 
-        # Create classification report with original class names
         cr = metrics.classification_report(test_y, predicted_y_decoded, zero_division=1)
-        log.info("Classification Report (original class names):\n%s", cr)
-
-        # Create a DataFrame for better formatted report
-        cr_dict = metrics.classification_report(
-            test_y, predicted_y_decoded, output_dict=True, zero_division=1
-        )
-        cr_df = pd.DataFrame(cr_dict).T
-        cr_df = cr_df.round(4)
-        log.info("Classification Report as DataFrame:\n%s", cr_df)
-
-        # Print F1 scores for each class with original class names
-        f1_per_class = metrics.f1_score(
-            test_y_encoded, predicted_y, average=None, zero_division=1
-        )
-        f1_per_class_dict = {}
+        log.info("Classification Report:\n%s", cr)
 
         log.info("F1 Scores per class:")
-        for cls, score in zip(le.classes_, f1_per_class, strict=False):
-            log.info(f"F1 Score for class '{cls}': {score:.4f}")
-            f1_per_class_dict[cls] = score
+        for cls, score in per_class_f1.items():
+            log.info("F1 Score for class '%s': %.4f", cls, score)
+
+    params = {
+        "correlation_threshold": pipeline.named_steps["feature_processing"]
+            .get_params()["numerical"]["feature_correlation"]["threshold"],
+        "variance_threshold": pipeline.named_steps["feature_processing"]
+            .get_params()["numerical"]["feature_variance"]["threshold"],
+        "train_rows": int(train_x.shape[0]),
+        "num_classes": len(le.classes_),
+        "class_weights": json.dumps({str(k): v for k, v in class_weights.items()}),
+    }
+
+    result = ClassificationResult(
+        accuracy=accuracy,
+        weighted_f1=weighted_f1,
+        macro_f1=macro_f1,
+        precision=precision,
+        recall=recall,
+        cohen_kappa=cohen_kappa,
+        matthews_corrcoef=mcc,
+        per_class_f1=per_class_f1,
+    )
+    tracker.log_classification(params, result, pipeline, le)
+    return pipeline, le
