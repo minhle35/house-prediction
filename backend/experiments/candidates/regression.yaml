@@ -1,0 +1,130 @@
+# Regression model candidates for experiment search.
+# Each entry defines a model family, its sklearn-compatible class, default constructor
+# kwargs, and the hyperparameter grid to sweep.
+#
+# Fields:
+#   family:      display name shown in MLflow and the leaderboard
+#   class:       fully-qualified Python class (importlib-resolved)
+#   defaults:    kwargs passed to the constructor for every grid point
+#   param_grid:  dict of {param: [values]} — expanded with ParameterGrid (exhaustive)
+#   type:        "voting" or "stacking" for ensemble specials (omit for standard models)
+
+candidates:
+  - family: LightGBM
+    class: lightgbm.LGBMRegressor
+    defaults:
+      verbosity: -1
+      random_state: 42
+    param_grid:
+      n_estimators: [100, 200]
+      max_depth: [6, 8]
+      learning_rate: [0.05, 0.08]
+
+  - family: XGBoost
+    class: xgboost.XGBRegressor
+    defaults:
+      verbosity: 0
+      random_state: 42
+    param_grid:
+      n_estimators: [100, 200]
+      max_depth: [4, 6]
+      learning_rate: [0.05, 0.10]
+
+  - family: HistGBM
+    class: sklearn.ensemble.HistGradientBoostingRegressor
+    defaults:
+      random_state: 42
+    param_grid:
+      max_iter: [100, 200]
+      max_depth: [6, 8]
+      learning_rate: [0.05, 0.10]
+
+  - family: GradientBoosting
+    class: sklearn.ensemble.GradientBoostingRegressor
+    defaults:
+      random_state: 42
+    param_grid:
+      n_estimators: [100, 200]
+      max_depth: [4, 6]
+      learning_rate: [0.05, 0.10]
+
+  - family: RandomForest
+    class: sklearn.ensemble.RandomForestRegressor
+    defaults:
+      random_state: 42
+      n_jobs: -1
+    param_grid:
+      n_estimators: [100, 200, 300]
+      max_depth: [null, 10, 20]
+
+  - family: ExtraTrees
+    class: sklearn.ensemble.ExtraTreesRegressor
+    defaults:
+      random_state: 42
+      n_jobs: -1
+    param_grid:
+      n_estimators: [100, 200]
+      max_depth: [null, 10, 20]
+
+  - family: AdaBoost
+    class: sklearn.ensemble.AdaBoostRegressor
+    defaults:
+      random_state: 42
+    param_grid:
+      n_estimators: [50, 100, 200]
+      learning_rate: [0.5, 1.0]
+
+  - family: Ridge
+    class: sklearn.linear_model.Ridge
+    defaults: {}
+    param_grid:
+      alpha: [0.1, 1.0, 10.0, 100.0]
+
+  - family: Lasso
+    class: sklearn.linear_model.Lasso
+    defaults:
+      max_iter: 5000
+    param_grid:
+      alpha: [0.001, 0.01, 0.1, 1.0]
+
+  - family: ElasticNet
+    class: sklearn.linear_model.ElasticNet
+    defaults:
+      max_iter: 5000
+    param_grid:
+      alpha: [0.001, 0.01, 0.1]
+      l1_ratio: [0.3, 0.5, 0.7]
+
+  # Complex ensembles — loader builds these from the sub-estimator list
+  - family: VotingEnsemble
+    type: voting
+    estimators:
+      - class: lightgbm.LGBMRegressor
+        params: {n_estimators: 200, max_depth: 8, learning_rate: 0.08, verbosity: -1, random_state: 42}
+        name: lgbm
+      - class: xgboost.XGBRegressor
+        params: {n_estimators: 200, max_depth: 6, learning_rate: 0.05, verbosity: 0, random_state: 42}
+        name: xgb
+      - class: sklearn.ensemble.RandomForestRegressor
+        params: {n_estimators: 200, random_state: 42, n_jobs: -1}
+        name: rf
+
+  - family: Stacking
+    type: stacking
+    estimators:
+      - class: lightgbm.LGBMRegressor
+        params: {n_estimators: 100, verbosity: -1, random_state: 42}
+        name: lgbm
+      - class: xgboost.XGBRegressor
+        params: {n_estimators: 100, verbosity: 0, random_state: 42}
+        name: xgb
+      - class: sklearn.ensemble.RandomForestRegressor
+        params: {n_estimators: 100, random_state: 42, n_jobs: -1}
+        name: rf
+      - class: sklearn.ensemble.GradientBoostingRegressor
+        params: {n_estimators: 100, random_state: 42}
+        name: gbm
+    final_estimator:
+      class: sklearn.linear_model.Ridge
+      params: {alpha: 1.0}
+    cv: 3
