@@ -2,6 +2,7 @@ import numpy as np
 
 from app.pipelines.base import SCHEMA_SPECIFIC_BASE_STEPS
 from app.transformer import CustomRegressionFeatures, FeatureProcessingPipeline
+from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 from app.transformer import CorrelationFeatureSelector, VarianceFeatureSelector
 from sklearn.impute import KNNImputer, SimpleImputer
@@ -49,3 +50,42 @@ PIPELINE_REGRESSION = Pipeline(
     ],
     memory=None,
 )
+
+
+def build_regression_pipeline(estimator: BaseEstimator) -> Pipeline:
+    """Build a regression pipeline with identical preprocessing to PIPELINE_REGRESSION but a swappable estimator.
+
+    The estimator is wrapped in TransformedTargetRegressor with log1p/expm1 so all
+    candidates — including linear models — are evaluated in the same transformed target space.
+    """
+    return Pipeline(
+        steps=[
+            *SCHEMA_SPECIFIC_BASE_STEPS,
+            ("custom_features", CustomRegressionFeatures(sell_month_col="sell_month")),
+            (
+                "feature_processing",
+                FeatureProcessingPipeline(
+                    numerical_steps=[
+                        ("feature_correlation", CorrelationFeatureSelector(threshold=0.95)),
+                        ("feature_variance", VarianceFeatureSelector(threshold=0.01)),
+                        ("imputer", KNNImputer(n_neighbors=10, weights="distance")),
+                        ("scaler", preprocessing.StandardScaler()),
+                    ],
+                    categorical_steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", preprocessing.OneHotEncoder(handle_unknown="ignore")),
+                    ],
+                ),
+            ),
+            (
+                "regression",
+                TransformedTargetRegressor(
+                    regressor=estimator,
+                    transformer=preprocessing.FunctionTransformer(
+                        np.log1p, inverse_func=np.expm1, validate=True, check_inverse=True
+                    ),
+                ),
+            ),
+        ],
+        memory=None,
+    )
