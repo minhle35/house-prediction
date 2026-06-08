@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -15,6 +16,12 @@ from sklearn.metrics import (
     r2_score,
     recall_score,
 )
+
+_INVALID_METRIC_CHARS = re.compile(r"[^a-zA-Z0-9_\-. :/]")
+
+
+def _safe_metric_key(name: str) -> str:
+    return _INVALID_METRIC_CHARS.sub("_", name)
 
 
 @dataclass
@@ -60,7 +67,10 @@ class ClassificationMetrics:
             "cohen_kappa": self.cohen_kappa,
             "matthews_corrcoef": self.matthews_corrcoef,
         }
-        per_class = {f"f1_{cls}": score for cls, score in self.per_class_f1.items()}
+        per_class = {
+            f"f1_{_safe_metric_key(cls)}": score
+            for cls, score in self.per_class_f1.items()
+        }
         return {**base, **per_class}
 
 
