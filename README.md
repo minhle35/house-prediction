@@ -1,8 +1,40 @@
 # Australian House Price & Type Prediction
 
-An end-to-end machine learning system that predicts residential property **sale price** (regression) and **property category** (classification) from suburb and property features across the Sydney market.
+A **Python backend service** for training, versioning, and serving classical ML models — structured to replace the typical notebook-per-model workflow with a reproducible, configurable system that runs identically on a local machine and on Azure.
 
-The project spans the full ML lifecycle: exploratory feature engineering, reproducible sklearn pipelines, a production-ready FastAPI inference layer, and a configurable experiment framework that sweeps 17 model families across 109 hyperparameter combinations — all tracked with MLflow.
+The core problem it solves: during model selection, data scientists typically duplicate Jupyter notebook cells for each model family, manually copy metrics into a spreadsheet, and lose track of which hyperparameter combination produced which result. This backend replaces that process with a YAML-driven experiment runner that trains every configured model, records all metrics and parameters to MLflow (backed by SQLite locally), and ranks results in a leaderboard — without writing a single line of Python per new model.
+
+The project covers the full ML lifecycle:
+
+- **Feature engineering** — composable, testable sklearn transformers (not notebook cells)
+- **Model selection** — YAML-configured sweep across 12 regression and 5 classification families, tracked with MLflow
+- **Model versioning** — MLflow model registry with threshold-gated promotion; artifacts stored in Azure Blob Storage for production
+- **Model serving** — FastAPI REST API that loads versioned artifacts from Azure (production) or local disk (development) and exposes typed `/predict` endpoints
+
+---
+
+## Why a backend instead of notebooks
+
+| Notebooks | This backend |
+|---|---|
+| Duplicate cell per model | YAML entry per model — one change, all runs update |
+| Metrics in a spreadsheet | MLflow UI — sortable, filterable, linked to exact parameters |
+| Implicit state between cells | Stateless sklearn pipelines — same code path in training and serving |
+| Model file named `model_v3_final.pkl` | MLflow run ID + model registry with named versions |
+| Runs only on the author's machine | `uv sync` reproducibility; same artifacts served via Azure in production |
+
+---
+
+## SQLite — no import needed
+
+MLflow uses [SQLAlchemy](https://www.sqlalchemy.org/) internally for its tracking store. SQLAlchemy in turn uses Python's built-in `sqlite3` standard library module — no additional package to install, no explicit import in application code. When MLflow receives `sqlite:////path/to/mlflow.db` as its tracking URI, it creates the database file and all schema tables automatically on first use. The `.db` file is a standard SQLite database readable by any SQLite client.
+
+```python
+# All that's needed in application code — MLflow handles everything else
+mlflow.set_tracking_uri("sqlite:////Users/.../backend/mlflow.db")
+```
+
+In production the tracking URI would point to a PostgreSQL instance (same SQLAlchemy abstraction, no code change), and artifact storage moves from `mlruns/` on local disk to Azure Blob Storage.
 
 ---
 
